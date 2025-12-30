@@ -125,15 +125,19 @@ module SinisaTools
           #   Color A04 → Bottom
           # Multiple sides can be banded.
           # --------------------------------------------------------
-          eb_l = eb_r = eb_t = eb_b = 0
+          
+          # Get all materials used on this object 
+          materials = detect_all_materials(entity)
+          
+          eb_l = eb_r = eb_t = eb_b = ""
 
           materials.each do |mat|
             m = mat.strip.downcase
 
-            eb_l = 1 if m == "color a01"
-            eb_r = 1 if m == "color a02"
-            eb_t = 1 if m == "color a03"
-            eb_b = 1 if m == "color a04"
+            eb_l = "x" if m == "color a01"
+            eb_r = "x" if m == "color a02"
+            eb_t = "x" if m == "color a03"
+            eb_b = "x" if m == "color a04"
           end
 
           # --------------------------------------------------------
