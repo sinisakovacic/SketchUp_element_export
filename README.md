@@ -43,14 +43,14 @@ Banding rules (exact material name match):
 
 Multiple sides can be banded on the same part.
 
-🔹 Tag‑Based Naming
+### Tag‑Based Naming
 Part names are taken from the Tag (Layer) assigned to the object.
 Fallbacks:
 1. Component instance name
 2. Component definition name
 3. "Unnamed"
 
-🔹 Clean CSV Output
+### Clean CSV Output
 The exported CSV contains:
 ```
 name,length,width,thickness,eb_l,eb_r,eb_t,eb_b
