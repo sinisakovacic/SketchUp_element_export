@@ -1,18 +1,17 @@
-# ============================================================
+# ================================================================
 #   element_export — SketchUp CSV Exporter
-#   Exports: name, length, width, thickness, edge banding (L/R/T/B)
+#   version: 1.0.3
+#   Exports: label, thickness, length, width, pices, edge banding
 #   Author: Sinisa (sinisak@live.com)
 #
-#   This script scans selected Groups/Components and generates
-#   a clean CSV cut-list for woodworking workflows.
-#
-#   Key features:
+#   Features:
 #   - Auto-detects dimensions (L/W/T)
 #   - Detects materials from instance, definition, and faces
 #   - Supports multi-side edge banding (A01/A02/A03/A04)
-#   - Extracts thickness from material
 #   - Uses Tag/Layer name as part name
-# ============================================================
+#   - Automatic counting of identical parts
+#   - Sorting by deb (thickness) DESC -> length DESC -> width DESC
+# ================================================================
 
 require 'sketchup.rb'
 
@@ -22,35 +21,29 @@ module SinisaTools
     MENU_NAME = "element_export"
 
     # CSV header row
-    CSV_HEADERS = "name,length,width,thickness,eb_l,eb_r,eb_t,eb_b\n"
+    CSV_HEADERS = "label,deb,length,width,pices,eb1,eb2,eb3,eb4\n"
 
     # ------------------------------------------------------------
     # Detect ALL materials used on the object:
-    # 1. Component instance material
-    # 2. Component definition material
-    # 3. Materials applied to individual faces
-    #
-    # Returns an array of lowercase material names.
+    # 1. Instance material
+    # 2. Definition material
+    # 3. Face materials
     # ------------------------------------------------------------
     def self.detect_all_materials(entity)
       materials = []
 
-      # Instance-level material
       materials << entity.material if entity.material
 
-      # Definition-level material
       if entity.respond_to?(:definition) && entity.definition.material
         materials << entity.definition.material
       end
 
-      # Face-level materials (most important for edge banding)
       if entity.respond_to?(:definition)
         entity.definition.entities.grep(Sketchup::Face).each do |face|
           materials << face.material if face.material
         end
       end
 
-      # Normalize names: lowercase, unique
       materials.compact.map { |m| m.display_name.downcase }.uniq
     end
 
@@ -61,89 +54,99 @@ module SinisaTools
       model = Sketchup.active_model
       selection = model.selection
 
-      # Require at least one selected object
       if selection.empty?
         UI.messagebox("Please select at least one Group or Component.")
         return
       end
 
-      # Ask user where to save the CSV
       filepath = UI.savepanel("Save element", "", "dimenzije.csv")
       return unless filepath
 
-      # Open CSV file for writing
+      # Hash for counting identical parts
+      parts = Hash.new { |h, k| h[k] = { pices: 0 } }
+
+      selection.each do |entity|
+        next unless entity.is_a?(Sketchup::Group) || entity.is_a?(Sketchup::ComponentInstance)
+
+        # -------------------------
+        # DIMENSIONS
+        # -------------------------
+        bbox = entity.bounds
+        x = bbox.width.to_mm.round
+        y = bbox.height.to_mm.round
+        z = bbox.depth.to_mm.round
+
+        dims = [x, y, z].sort
+        thickness = dims[0]
+        width     = dims[1]
+        length    = dims[2]
+
+        # -------------------------
+        # NAME
+        # -------------------------
+        tag_name = if entity.respond_to?(:layer) && entity.layer
+                     entity.layer.display_name
+                   else
+                     entity.name
+                   end
+
+        if tag_name.nil? || tag_name.strip.empty?
+          tag_name = entity.respond_to?(:definition) ? entity.definition.name : "Unnamed"
+        end
+
+        tag_name = "Unnamed" if tag_name.nil? || tag_name.strip.empty?
+
+        # -------------------------
+        # EDGE BANDING
+        # -------------------------
+        materials = detect_all_materials(entity)
+
+        eb1 = eb2 = eb3 = eb4 = ""
+
+        materials.each do |mat|
+          m = mat.strip.downcase
+          eb1 = "x" if m == "color a01"
+          eb2 = "x" if m == "color a02"
+          eb3 = "x" if m == "color a03"
+          eb4 = "x" if m == "color a04"
+        end
+
+        # -------------------------
+        # UNIQUE KEY FOR COUNTING
+        # -------------------------
+        key = [
+          tag_name,
+          thickness,
+          length,
+          width,
+          eb1, eb2, eb3, eb4
+        ].join("|")
+
+        # Store values + increment count
+        parts[key][:name]      = tag_name
+        parts[key][:thickness] = thickness
+        parts[key][:length]    = length
+        parts[key][:width]     = width
+        parts[key][:eb1]       = eb1
+        parts[key][:eb2]       = eb2
+        parts[key][:eb3]       = eb3
+        parts[key][:eb4]       = eb4
+        parts[key][:pices]    += 1
+      end
+
+      # -------------------------
+      # SORT PARTS
+      # -------------------------
+      sorted_parts = parts.values.sort_by { |p| [-p[:thickness], -p[:length], -p[:width]] }
+
+      # -------------------------
+      # WRITE CSV
+      # -------------------------
       File.open(filepath, "w") do |file|
         file.write(CSV_HEADERS)
 
-        # Process each selected entity
-        selection.each do |entity|
-          next unless entity.is_a?(Sketchup::Group) || entity.is_a?(Sketchup::ComponentInstance)
-
-          # --------------------------------------------------------
-          # DIMENSION DETECTION
-          # --------------------------------------------------------
-          bbox = entity.bounds
-
-          # Convert bounding box dimensions to mm
-          # Replace *.round with *.round(2) for two decimal points
-          x = bbox.width.to_mm.round
-          y = bbox.height.to_mm.round
-          z = bbox.depth.to_mm.round
-
-          # Sort dimensions to determine L/W/T
-          dims = [x, y, z].sort
-          thickness = dims[0]   # smallest dimension
-          width     = dims[1]   # middle dimension
-          length    = dims[2]   # largest dimension
-
-          # --------------------------------------------------------
-          # NAME DETECTION (Tag → Instance → Definition)
-          # --------------------------------------------------------
-          tag_name = nil
-
-          # Prefer Tag/Layer name
-          if entity.respond_to?(:layer) && entity.layer
-            tag_name = entity.layer.display_name
-          end
-
-          # Fallbacks
-          if tag_name.nil? || tag_name.strip.empty?
-            tag_name = entity.name
-            if tag_name.empty? && entity.respond_to?(:definition)
-              tag_name = entity.definition.name
-            end
-          end
-
-          tag_name = "Unnamed" if tag_name.nil? || tag_name.strip.empty?
-
-          # --------------------------------------------------------
-          # EDGE BANDING DETECTION
-          # Based on exact material names:
-          #   Color A01 → Left
-          #   Color A02 → Right
-          #   Color A03 → Top
-          #   Color A04 → Bottom
-          # Multiple sides can be banded.
-          # --------------------------------------------------------
-          
-          # Get all materials used on this object 
-          materials = detect_all_materials(entity)
-          
-          eb_l = eb_r = eb_t = eb_b = ""
-
-          materials.each do |mat|
-            m = mat.strip.downcase
-
-            eb_l = "x" if m == "color a01"
-            eb_r = "x" if m == "color a02"
-            eb_t = "x" if m == "color a03"
-            eb_b = "x" if m == "color a04"
-          end
-
-          # --------------------------------------------------------
-          # WRITE CSV ROW
-          # --------------------------------------------------------
-          file.write("#{tag_name},#{length},#{width},#{thickness},#{eb_l},#{eb_r},#{eb_t},#{eb_b}\n")
+        sorted_parts.each do |p|
+          file.write("#{p[:name]},#{p[:thickness]},#{p[:length]},#{p[:width]},#{p[:pices]},#{p[:eb1]},#{p[:eb2]},#{p[:eb3]},#{p[:eb4]}\n")
         end
       end
 
@@ -151,7 +154,7 @@ module SinisaTools
     end
 
     # ------------------------------------------------------------
-    # Add menu item to SketchUp
+    # Add menu item
     # ------------------------------------------------------------
     unless file_loaded?(__FILE__)
       UI.menu("Plugins").add_item(MENU_NAME) {
